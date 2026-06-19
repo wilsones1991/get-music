@@ -94,6 +94,24 @@
         <input type="text" id="magnet" name="magnet" placeholder="manual magnet link here">
         <input type="submit" id="submit" value="Download torrent/magnet link" class="blue-text">
     </form>
+    <p id="yt-output"></p>
+    <form id="yt-form" hx-post="/yt" hx-swap="innerHTML" hx-target="#yt-output" hx-indicator="#spinner">
+        <h3>Paste a YouTube (or other) link → MP3 or video</h3>
+        <input type="url" id="yt-url" name="url" placeholder="https://www.youtube.com/watch?v=...">
+        <select class="biginput" name="kind">
+            <option value="audio">Audio (MP3)</option>
+            <option value="video">Video</option>
+        </select>
+        <input type="submit" value="Download from link" class="blue-text">
+    </form>
+    <div hx-get="/yt-status?limit=5" hx-trigger="load, every 20s, click" hx-swap="morph:innerHTML" hx-indicator="#spinner" hx-target-500="this">
+      <table>
+        <tbody>
+          <tr><th>Name</th><th>DL Status</th></tr>
+          <tr><td>loading</td><td>loading</td></tr>
+        </tbody>
+      </table>
+    </div>
     <h3>or search torrent aggregator (via <a href="https://snowfl.com">snowfl.com</a>) or try <a href="https://btdig.com">btdig</a> manually</h3>
     <form hx-post="/snowfl"  hx-swap="innerHTML" hx-target="#snowfl-output" hx-indicator="#spinner" hx-target-500="#snowfl-output">
       <input required type="text" name="query" placeholder="search aggregator"></input>

@@ -1,14 +1,16 @@
 # get-music
 
 A small web app to search torrent aggregators (YTS, Snowfl) and send downloads to
-**qBittorrent**, with **Google SSO** + an admin-managed email allowlist, and an automatic
-**Jellyfin** library refresh after each download.
+**qBittorrent**, plus **paste a YouTube (or other) link** to grab it as MP3 or video (via
+self-hosted **MeTube**), with **Google SSO** + an admin-managed email allowlist, and an
+automatic **Jellyfin** library refresh after each download.
 
 ## Architecture
 
 ```
 [Browser] --HTTPS--> [Coolify/VPS: this app] --WireGuard--> [Mac mini]
                                                               ├─ qBittorrent (Docker, via gluetun/Mullvad) → hard drive
+                                                              ├─ MeTube (Docker, yt-dlp; normal connection) → hard drive
                                                               └─ Jellyfin
 ```
 

@@ -11,6 +11,7 @@ const emojiFavicon = require("emoji-favicon");
 
 const snowfl = require("./snowfl");
 const qbittorrent = require("./qbittorrent");
+const metube = require("./metube");
 const jellyfin = require("./jellyfin");
 const vpn = require("./vpn");
 const users = require("./users");
@@ -192,6 +193,33 @@ app.post("/yts", ensureAuth, async function (request, response) {
   }
 });
 
+// Paste a link (YouTube, etc.) → download audio (MP3) or video via MeTube on the
+// Mac mini. Unlike torrents this does not go through Mullvad, so there's no VPN
+// gate. MeTube routes audio to AUDIO_DOWNLOAD_DIR and video to DOWNLOAD_DIR.
+app.post("/yt", ensureAuth, async function (request, response) {
+  try {
+    if (!metube.isConfigured()) {
+      return response.status(503).send("Link downloads are not configured (METUBE_URL unset).");
+    }
+    const url = (request.body.url || "").trim();
+    const kind = request.body.kind === "video" ? "video" : "audio";
+    if (!url.startsWith("http")) {
+      return response.status(400).send("Invalid URL - must start with 'http'");
+    }
+    const result = await metube.addDownload(url, kind);
+    if (result.success) {
+      jellyfin.refreshLibrary(); // fire-and-forget
+      return response.status(200).send(`submitted ${kind}: ${url}`);
+    }
+    const errorMsg = `MeTube rejected the link (status ${result.status}). Response: ${result.responseBody}`;
+    console.error("MeTube submission failed:", errorMsg);
+    return response.status(400).send(errorMsg);
+  } catch (error) {
+    console.error("Error in /yt endpoint:", error);
+    return response.status(500).send(`Internal server error: ${error.message}`);
+  }
+});
+
 // Free disk space on the qBittorrent download volume.
 app.get("/diskspace", ensureAuth, async function (request, response) {
   try {
@@ -235,6 +263,46 @@ app.get("/dl-status", ensureAuth, async function (request, response) {
                     <tr>
                       <th>Name</th>
                       <th>Size</th>
+                      <th>DL Status</th>
+                    </tr>
+                    ${content}
+                  </table>`;
+    response.send(htmlTable);
+  } catch (error) {
+    console.error(error);
+    response.status(500).send("Internal Server Error");
+  }
+});
+
+// MeTube (link download) status table, mirroring /dl-status for the HTMX swap.
+app.get("/yt-status", ensureAuth, async function (request, response) {
+  try {
+    if (!metube.isConfigured()) {
+      return response.send("<table><tr><td>Link downloads not configured.</td></tr></table>");
+    }
+    const limit = parseInt(request.query.limit, 10) || 5;
+    const items = await metube.getHistory(limit);
+    const content = items
+      .map(({ title, status, percent, speed }) => {
+        let dlStatus;
+        if (status === "finished") {
+          dlStatus = "✅ Done";
+        } else if (speed > 0) {
+          const mbps = (speed / 1000000).toFixed(1);
+          dlStatus = `⬇ ${percent ?? 0}% · ${mbps} MB/s`;
+        } else {
+          dlStatus = `${percent ?? 0}% · ${status}`;
+        }
+        return `<tr>
+              <td>${String(title).substring(0, 40)}</td>
+              <td>${dlStatus}</td>
+            </tr>`;
+      })
+      .join("\n");
+
+    const htmlTable = `<table>
+                    <tr>
+                      <th>Name</th>
                       <th>DL Status</th>
                     </tr>
                     ${content}

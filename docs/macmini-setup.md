@@ -12,6 +12,7 @@ tunnel**. Torrent traffic itself goes out through Mullvad.
 ```
 [Browser] --HTTPS--> [Coolify/VPS: this app] --WireGuard--> [Mac mini]
                                                               ├─ qBittorrent (Docker, via gluetun/Mullvad) → hard drive
+                                                              ├─ MeTube (Docker, yt-dlp; normal connection) → hard drive
                                                               └─ Jellyfin
 ```
 
@@ -68,6 +69,49 @@ default. To survive a mini reboot, set Colima to start on login (e.g. a LaunchAg
 
 ---
 
+## 1b. MeTube — paste a link → MP3 or video (Mac mini)
+
+MeTube is a self-hosted yt-dlp service that powers the app's "Paste a YouTube (or
+other) link" form. It runs in the same Colima/Docker stack as qBittorrent but on the
+mini's **normal connection — NOT through gluetun/Mullvad** (YouTube blocks VPN/datacenter
+IPs, and this isn't torrent traffic, so the killswitch doesn't apply).
+
+Add a service to `~/qbt-vpn/docker-compose.yml` (do **not** give it
+`network_mode: service:gluetun`):
+
+```yaml
+  metube:
+    image: ghcr.io/alexta69/metube:latest   # pin to a specific tag/digest in practice
+    container_name: metube
+    restart: unless-stopped
+    ports:
+      - "8081:8081"                          # host port (8080/8090/8096/8000 are taken)
+    environment:
+      - UID=<same PUID as qBittorrent>       # so files are owned the way Jellyfin expects
+      - GID=<same PGID as qBittorrent>
+      - DOWNLOAD_DIR=/downloads/video        # video lands here
+      - AUDIO_DOWNLOAD_DIR=/downloads/music  # audio-only (MP3) lands here
+      - STATE_DIR=/downloads/.metube-state   # persist queue/history across restarts
+      - DEFAULT_THEME=auto
+    volumes:
+      # Mount the SAME drive roots Jellyfin reads (follow the existing /Volumes mount
+      # convention — virtiofs chokes on spaces in the drive name).
+      - /Volumes/.../<jellyfin-music>:/downloads/music
+      - /Volumes/.../<jellyfin-general-or-movies>:/downloads/video
+```
+
+Then `docker compose up -d metube`. MeTube sends audio-only downloads to
+`AUDIO_DOWNLOAD_DIR` and everything else to `DOWNLOAD_DIR`, so files land directly in the
+existing Jellyfin libraries (the app fires a Jellyfin refresh after each submit). Set the
+app's `METUBE_URL` to `http://<mac-mini-wg-ip>:8081`. Leaving `METUBE_URL` unset hides the
+feature.
+
+> **API note:** MeTube's `/add` body has changed across releases. After pinning a tag,
+> confirm the exact payload (open MeTube's UI, watch the `POST /add` request in browser
+> devtools, or `curl` it) and make sure `metube.js`'s `addDownload` matches.
+
+---
+
 ## 2. WireGuard reachability (VPS → Mac mini)
 
 The VPS must be a WireGuard peer that can reach the Mac mini's WG IP. From the VPS:
@@ -76,9 +120,11 @@ The VPS must be a WireGuard peer that can reach the Mac mini's WG IP. From the V
 curl http://<mac-mini-wg-ip>:8080        # qBittorrent Web UI
 curl http://<mac-mini-wg-ip>:8000/v1/publicip/ip   # gluetun control (VPN status)
 curl http://<mac-mini-wg-ip>:8096/System/Info/Public   # Jellyfin
+curl http://<mac-mini-wg-ip>:8081/history              # MeTube (link downloads)
 ```
 
-Use these WG IPs in the app's `QBITTORRENT_URL`, `GLUETUN_CONTROL_URL`, `JELLYFIN_URL`.
+Use these WG IPs in the app's `QBITTORRENT_URL`, `GLUETUN_CONTROL_URL`, `JELLYFIN_URL`,
+`METUBE_URL`.
 
 > **Container networking note:** the Coolify app runs in a Docker container on the VPS. It
 > must be able to route to the Mac mini's WireGuard IP. Easiest options: run WireGuard on
