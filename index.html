@@ -28,9 +28,17 @@
         integrity="sha512-gHU0A38WiT7Jyubh7KcU6af64wRVBnNEB1541Ue5W050dRL/f21IWkAD8sl85nVjPyLnbffiXsCborGDQ55bYQ=="
         crossorigin="anonymous" referrerpolicy="no-referrer" />
 
-        <h2>get-movie.kevbot.xyz</h2>
+        <div id="user-bar" class="user-bar">
+          <span id="vpn-badge" class="vpn-badge vpn-unknown">VPN: checking…</span>
+          <span class="user-bar-right">
+            <span id="user-email"></span>
+            <a id="admin-link" href="/admin" style="display:none">[admin]</a>
+            <a href="/auth/logout">[logout]</a>
+          </span>
+        </div>
+        <h2>get-music</h2>
         <p>Click a button in the table below, or manually input a magnet link</p>
-        <p>After a few minutes, it should be available on our jellyfin, emby, or plex instances. &nbsp;<span id="rutorrent-url">rutorrent-url</span></p>
+        <p>After a few minutes, it should be available on your Jellyfin instance. &nbsp;<span id="client-url">qbittorrent</span></p>
         <h2>Recent Downloads (Click table to refresh) <img  id="spinner-dl" class="htmx-indicator" src="/bars.svg"/></h2>
         <div hx-get="/dl-status?limit=5" hx-trigger="load, every 20s, click" hx-swap="morph:innerHTML" hx-indicator="#spinner-dl" hx-target-500="#dl-status">
           <table>
@@ -73,22 +81,13 @@
         </div>
     <h2>Direct all downloads to which directory? (eg movie/tv/general):</h2>
         <select form="main-form" name="mediatype" id="mediatype" class="biginput">
-            <option value="/mnt/shared/media/movies">Movie Directory</option>
-            <option value="/mnt/shared/media/tvshows">TV Show Directory</option>
-            <option value="/mnt/shared/media/music">Music Directory</option>
-            <option value="/mnt/shared/media/torrents">General Torrent Directory</option>
-            <option value="/mnt/shared/media/roms/switch">Switch Games</option>
+            <option>loading…</option>
         </select>
       <label class="biginput" for="label">with label:</label>
         <select class="biginput" form="main-form" name="label" id="label">
             <option value="no-label">no-label</option>
-            <option>kevin</option>
-            <option>harrison</option>
-            <option>jodizzle</option>
-            <option>aaron</option>
-            <option>matt</option>
             <option>eric</option>
-            <option>i-am-so-leet</option>
+            <option>household</option>
             <option value="viewing club">viewing club</option>
         </select>
     <p id="post-output"></p>
@@ -149,6 +148,30 @@
         .biginput {
             font-size: 30px;
         }
+        .user-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            border-bottom: 1px solid #ddd;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        .user-bar-right a {
+            margin-left: 10px;
+        }
+        .user-bar-right #user-email {
+            color: #555;
+            font-weight: bold;
+        }
+        .vpn-badge {
+            font-weight: bold;
+            padding: 3px 8px;
+            border-radius: 4px;
+        }
+        .vpn-ok { background: #e6f4ea; color: #137333; }
+        .vpn-down { background: #fce8e6; color: #c5221f; }
+        .vpn-unknown { background: #f1f3f4; color: #5f6368; }
     </style>
 </body>
 

@@ -1,11 +1,11 @@
 {
-  "name": "node-js-sample",
-  "version": "0.2.0",
-  "description": "A sample Node.js app using Express 4",
+  "name": "get-music",
+  "version": "0.3.0",
+  "description": "Search torrent aggregators and send downloads to qBittorrent, with Google SSO and a Jellyfin library refresh",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon start"
+    "dev": "nodemon index.js"
   },
   "dependencies": {
     "body-parser": "^1.20.1",
@@ -13,10 +13,14 @@
     "dotenv": "^16.0.3",
     "emoji-favicon": "^0.3.0",
     "express": "^4.13.3",
+    "express-session": "^1.18.0",
     "json-html-table": "^2.0.1",
     "json2html": "^0.0.8",
     "node-fetch": "^3.3.0",
     "nodemon": "^3.0.1",
+    "passport": "^0.7.0",
+    "passport-google-oauth20": "^2.0.0",
+    "session-file-store": "^1.5.0",
     "snowfl-api": "^1.0.2"
   },
   "engines": {
@@ -24,16 +28,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/heroku/node-js-sample"
+    "url": "https://github.com/kleutzinger/get-movie"
   },
   "keywords": [
     "node",
-    "heroku",
-    "express"
-  ],
-  "author": "Mark Pundsack",
-  "contributors": [
-    "Zeke Sikelianos <zeke@sikelianos.com> (http://zeke.sikelianos.com)"
+    "express",
+    "torrent",
+    "qbittorrent",
+    "jellyfin"
   ],
   "license": "MIT"
 }

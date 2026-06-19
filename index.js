@@ -2,112 +2,72 @@ require("dotenv").config();
 const fetch = (...args) =>
   import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
-var express = require("express");
-var cors = require("cors");
-var emojiFavicon = require("emoji-favicon");
+const path = require("path");
+const express = require("express");
+const session = require("express-session");
+const FileStore = require("session-file-store")(session);
+const bodyParser = require("body-parser");
+const emojiFavicon = require("emoji-favicon");
+
 const snowfl = require("./snowfl");
-var app = express();
-// create application/json parser
-var bodyParser = require("body-parser");
-var rutorrent_url = process.env.RUTORRENT_URL;
+const qbittorrent = require("./qbittorrent");
+const jellyfin = require("./jellyfin");
+const vpn = require("./vpn");
+const users = require("./users");
+const { passport, router: authRouter, ensureAuth, ensureAdmin } = require("./auth");
+
 const TMDB_KEY = process.env.TMDB_KEY;
+const QBITTORRENT_WEBUI_URL = process.env.QBITTORRENT_URL;
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
+const isProd = process.env.NODE_ENV === "production";
 
+// Download directories as qBittorrent (in its container) sees them. Driven by
+// env so the same image works for any mount layout; the frontend builds its
+// dropdown from /media-paths and the server only accepts these exact values.
+const MEDIA_PATHS = {
+  "Movie Directory": process.env.MEDIA_MOVIES || "/downloads/movies",
+  "TV Show Directory": process.env.MEDIA_TV || "/downloads/tvshows",
+  "Music Directory": process.env.MEDIA_MUSIC || "/downloads/music",
+  "General Torrent Directory": process.env.MEDIA_GENERAL || "/downloads/torrents",
+};
+const ALLOWED_SAVE_PATHS = new Set(Object.values(MEDIA_PATHS));
+
+const app = express();
 app.set("port", process.env.PORT || 5000);
-app.use(express.static(__dirname + "/public"));
+app.set("trust proxy", 1); // Coolify terminates TLS upstream
+
+// Seed bootstrap admins into the allowlist file.
+users.init();
+
+// --- middleware ---------------------------------------------------------------
 app.use(bodyParser.urlencoded({ extended: false }));
-app.use(cors());
+app.use(
+  session({
+    store: new FileStore({
+      path: path.join(DATA_DIR, "sessions"),
+      retries: 1,
+      logFn: () => {},
+    }),
+    secret: process.env.SESSION_SECRET || "insecure-dev-secret-change-me",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: "lax",
+      maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days
+    },
+  })
+);
+app.use(passport.initialize());
+app.use(passport.session());
 app.use(emojiFavicon("cinema"));
-app.use("/snowfl", snowfl);
 
-async function get_torrent(magnet_url, dir_path, extra_options = {}) {
-  // initiate a torrent download on a remote server
-  let endpoint = `${rutorrent_url}/php/addtorrent.php`;
+// Public: favicon, static assets (css/js/images), and auth routes.
+app.use(express.static(__dirname + "/public"));
+app.use("/", authRouter);
 
-  // Check if it's an HTTP URL (torrent file download) vs magnet link
-  if (magnet_url.startsWith("http")) {
-    try {
-      console.log("Downloading torrent file from:", magnet_url);
-      // Download the torrent file first
-      const torrentResponse = await fetch(magnet_url);
-      if (!torrentResponse.ok) {
-        return {
-          success: false,
-          status: torrentResponse.status,
-          statusText: torrentResponse.statusText,
-          responseBody: `Failed to download torrent file from ${magnet_url}`,
-        };
-      }
-      const torrentBuffer = await torrentResponse.arrayBuffer();
-      const torrentBase64 = Buffer.from(torrentBuffer).toString('base64');
-
-      // Send the torrent file content to RuTorrent
-      let body = {
-        torrent_file: torrentBase64,
-        dir_edit: dir_path,
-        ...extra_options,
-      };
-      console.log("posting torrent file (base64 length:", torrentBase64.length, ")");
-      let r = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: new URLSearchParams(body),
-      });
-      const text = await r.text();
-      console.log(r.status, r.statusText, text);
-
-      const success = text.includes('"success"') && r.ok;
-      return {
-        success,
-        status: r.status,
-        statusText: r.statusText,
-        responseBody: text,
-      };
-    } catch (error) {
-      return {
-        success: false,
-        status: 500,
-        statusText: "Internal Error",
-        responseBody: `Error downloading/processing torrent file: ${error.message}`,
-      };
-    }
-  } else {
-    // It's a magnet link, send it directly
-    let body = {
-      url: magnet_url,
-      dir_edit: dir_path,
-      ...extra_options,
-    };
-    console.log("posting body:", body);
-    let r = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams(body),
-    });
-    const text = await r.text();
-    console.log(r.status, r.statusText, text);
-
-    const success = text.includes('"success"') && r.ok;
-    return {
-      success,
-      status: r.status,
-      statusText: r.statusText,
-      responseBody: text,
-    };
-  }
-}
-
-app.get("/", function (request, response) {
-  response.sendFile(__dirname + "/index.html");
-});
-
-app.get("/empty", function (request, response) {
-  response.send("");
-});
-
+// --- torrent download ----------------------------------------------------------
 const DEFAULT_TRACKERS = [
   "udp://tracker.opentrackr.org:1337/announce",
   "udp://tracker.torrent.eu.org:451/announce",
@@ -122,15 +82,63 @@ const DEFAULT_TRACKERS = [
 ];
 
 function construct_magnet_link(hash, display_name, trackers) {
-  // Construct a magnet link from hash, display name, and tracker list
   const dn = encodeURIComponent(display_name);
-  const trackerParams = trackers.map(t => `tr=${encodeURIComponent(t)}`).join('&');
+  const trackerParams = trackers.map((t) => `tr=${encodeURIComponent(t)}`).join("&");
   return `magnet:?xt=urn:btih:${hash}&dn=${dn}&${trackerParams}`;
 }
 
-app.post("/post", async function (request, response, next) {
+// Shared submit path for /post and /yts: refuse if the VPN is down, hand the
+// magnet/url to qBittorrent, then nudge Jellyfin to scan.
+async function submitDownload(magnet, savePath, label, res) {
+  if (!ALLOWED_SAVE_PATHS.has(savePath)) {
+    return res.status(400).send("Invalid download directory");
+  }
+
+  const vpnStatus = await vpn.getStatus();
+  if (vpnStatus.configured && !vpnStatus.active) {
+    return res
+      .status(503)
+      .send("Refusing to download: VPN tunnel is not active. Check gluetun/Mullvad.");
+  }
+
+  const options = {};
+  if (label && label !== "no-label") options.category = label;
+
+  const result = await qbittorrent.addTorrent(magnet, savePath, options);
+  if (result.success) {
+    jellyfin.refreshLibrary(); // fire-and-forget
+    return res.status(200).send(`succesfully submitted ${magnet}`);
+  }
+  const errorMsg = `Failed to submit torrent. qBittorrent returned status ${result.status} (${result.statusText}). Response: ${result.responseBody}`;
+  console.error("Torrent submission failed:", errorMsg);
+  return res.status(400).send(errorMsg);
+}
+
+// --- routes (all require auth) -------------------------------------------------
+app.get("/", ensureAuth, function (request, response) {
+  response.sendFile(__dirname + "/index.html");
+});
+
+app.get("/empty", ensureAuth, function (request, response) {
+  response.send("");
+});
+
+app.use("/snowfl", ensureAuth, snowfl);
+
+app.get("/media-paths", ensureAuth, function (request, response) {
+  response.json(MEDIA_PATHS);
+});
+
+app.get("/client-url", ensureAuth, function (request, response) {
+  response.json({ url: QBITTORRENT_WEBUI_URL });
+});
+
+app.get("/vpn-status", ensureAuth, async function (request, response) {
+  response.json(await vpn.getStatus());
+});
+
+app.post("/post", ensureAuth, async function (request, response) {
   try {
-    // Validate required fields
     if (!request.body.magnet) {
       return response.status(400).send("Missing required field: magnet");
     }
@@ -138,123 +146,72 @@ app.post("/post", async function (request, response, next) {
       return response.status(400).send("Missing required field: mediatype");
     }
 
-    let extra_options = {};
-    if (request.body.label !== "no-label") {
-      extra_options["label"] = request.body.label;
-    }
-
     let magnet = request.body.magnet;
 
-    // Check if this is a YTS torrent download URL
+    // YTS download URLs are turned into magnet links from their hash.
     if (magnet.includes("yts.gg/torrent/download/")) {
-      // Extract hash, quality, type, movie title, and movie URL from request
-      const hash = request.body.hash;
-      const quality = request.body.quality;
-      const type = request.body.type;
-      const movieTitle = request.body.movieTitle;
-      const movieUrl = request.body.movieUrl;
-
+      const { hash, quality, type, movieTitle } = request.body;
       if (!hash || !quality || !type || !movieTitle) {
-        return response.status(400).send("YTS torrents require hash, quality, type, and movieTitle fields");
+        return response
+          .status(400)
+          .send("YTS torrents require hash, quality, type, and movieTitle fields");
       }
-
-      // Construct magnet link from hash and trackers
       const displayName = `${movieTitle} ${quality} ${type}`;
       magnet = construct_magnet_link(hash, displayName, DEFAULT_TRACKERS);
       console.log("Constructed magnet link:", magnet);
     } else if (!magnet.startsWith("magnet:") && !magnet.startsWith("http")) {
-      return response.status(400).send("Invalid magnet link or url - must start with 'magnet:' or 'http'");
+      return response
+        .status(400)
+        .send("Invalid magnet link or url - must start with 'magnet:' or 'http'");
     }
 
-    let result = await get_torrent(
-      magnet,
-      request.body.mediatype,
-      extra_options
-    );
-
-    if (result.success) {
-      response.status(200).send(`succesfully submitted ${magnet}`);
-    } else {
-      // Provide detailed error information
-      const errorMsg = `Failed to submit torrent. RuTorrent returned status ${result.status} (${result.statusText}). Response: ${result.responseBody}`;
-      console.error("Torrent submission failed:", errorMsg);
-      return response.status(400).send(errorMsg);
-    }
+    return await submitDownload(magnet, request.body.mediatype, request.body.label, response);
   } catch (error) {
     console.error("Error in /post endpoint:", error);
     return response.status(500).send(`Internal server error: ${error.message}`);
   }
 });
 
-// get available disk space from rutorrent
-app.get("/diskspace", async function (request, response) {
+app.post("/yts", ensureAuth, async function (request, response) {
   try {
-    const endpoint = `${rutorrent_url}/plugins/diskspace/action.php`;
-    const result = await fetch(endpoint);
-    const data = await result.json();
-    response.json(data);
+    if (!request.body.magnet) {
+      return response.status(400).send("Missing required field: magnet");
+    }
+    if (!request.body.mediatype) {
+      return response.status(400).send("Missing required field: mediatype");
+    }
+    return await submitDownload(
+      request.body.magnet,
+      request.body.mediatype,
+      request.body.label,
+      response
+    );
+  } catch (error) {
+    console.error("Error in /yts endpoint:", error);
+    return response.status(500).send(`Internal server error: ${error.message}`);
+  }
+});
+
+// Free disk space on the qBittorrent download volume.
+app.get("/diskspace", ensureAuth, async function (request, response) {
+  try {
+    response.json(await qbittorrent.getFreeSpace());
   } catch (error) {
     console.error(error);
     response.status(500).send("Internal Server Error");
   }
 });
 
-const exampleResponse = `
-{"items": [
-    {
-      "action": 2,
-      "name": "RCT2_Deluxe_Plus_OpenRCT2.iso",
-      "size": 606732288,
-      "downloaded": 606732288,
-      "uploaded": 0,
-      "ratio": 0,
-      "creation": 0,
-      "added": 1701039458,
-      "finished": 1701039502,
-      "tracker": "udp://a.bc.d:6969/announce",
-      "label": "kevin",
-      "action_time": 1701039502,
-      "hash": "f1ca51f4afa47f5bed33bf7102952105"
-    }, {}
-]}
-
-`;
-app.get("/dl-status", async function (request, response) {
+// Recent downloads table (kept as server-rendered HTML for the existing HTMX swap).
+app.get("/dl-status", ensureAuth, async function (request, response) {
   try {
-    const limit = request.query.limit || 5;
-    const endpoint = `${rutorrent_url}/plugins/history/action.php?cmd=get&mark=0`;
-    const result = await fetch(endpoint);
-    const data = await result.json();
-    const sortedData = data.items
-      .sort((a, b) => b.added - a.added)
-      .sort((a, b) => b.action_time - a.action_time);
-    // keep only the most recent items by unique name
-    const uniqueNames = new Set();
-    const deletedNames = new Set();
-    const uniqueData = [];
-    for (const item of sortedData) {
-      if (item.action === 3) {
-        deletedNames.add(item.name);
-      }
-      if (!uniqueNames.has(item.name)) {
-        if (deletedNames.has(item.name)) {
-          continue;
-        }
-        uniqueNames.add(item.name);
-        uniqueData.push(item);
-      }
-    }
-    const content = uniqueData
-      .slice(0, limit)
+    const limit = parseInt(request.query.limit, 10) || 5;
+    const items = await qbittorrent.getTorrents(limit);
+    const content = items
       .map((item) => {
-        const { name, size, downloaded, added, finished, hash } = item;
-        const shortHash = hash.substring(0, 8);
+        const { name, size, finished } = item;
         const sizeGB = (size / 1000000000).toFixed(2);
-        const dlStatus = finished == 0 ? "Started" : "Done";
-
-        // Calculate downloaded vs size percent
-        const downloadPercent = ((downloaded / size) * 100).toFixed(2);
-
+        const dlStatus = finished ? "Done" : "Started";
         return `<tr>
               <td>${name.substring(0, 40)}</td>
               <td>${sizeGB}GB</td>
@@ -278,11 +235,7 @@ app.get("/dl-status", async function (request, response) {
   }
 });
 
-app.get("/rutorrent-url", async function (request, response, next) {
-  response.json({ url: rutorrent_url });
-});
-
-app.get("/tmdb-poster", async function (request, response) {
+app.get("/tmdb-poster", ensureAuth, async function (request, response) {
   const imdb_id = request.query.imdb_id;
   if (!imdb_id || !TMDB_KEY) {
     return response.status(400).send("Missing imdb_id or TMDB_KEY not configured");
@@ -301,39 +254,42 @@ app.get("/tmdb-poster", async function (request, response) {
   }
 });
 
-app.post("/yts", async function (request, response, next) {
+// --- admin (allowlist management) ----------------------------------------------
+app.get("/admin", ensureAdmin, function (request, response) {
+  response.sendFile(__dirname + "/admin.html");
+});
+
+app.get("/admin/api/users", ensureAdmin, function (request, response) {
+  response.json({ users: users.listUsers() });
+});
+
+app.post("/admin/api/users", ensureAdmin, function (request, response) {
   try {
-    // Validate required fields
-    if (!request.body.magnet) {
-      return response.status(400).send("Missing required field: magnet");
-    }
-    if (!request.body.mediatype) {
-      return response.status(400).send("Missing required field: mediatype");
-    }
-
-    let extra_options = {};
-    if (request.body.label && request.body.label !== "no-label") {
-      extra_options["label"] = request.body.label;
-    }
-
-    let magnet = request.body.magnet;
-    let result = await get_torrent(
-      magnet,
-      request.body.mediatype,
-      extra_options
-    );
-
-    if (result.success) {
-      response.status(200).send(`succesfully submitted ${magnet}`);
-    } else {
-      // Provide detailed error information
-      const errorMsg = `Failed to submit torrent. RuTorrent returned status ${result.status} (${result.statusText}). Response: ${result.responseBody}`;
-      console.error("Torrent submission failed:", errorMsg);
-      return response.status(400).send(errorMsg);
-    }
+    const { email, isAdmin } = request.body;
+    const list = users.addUser(email, {
+      isAdmin: isAdmin === "true" || isAdmin === true || isAdmin === "on",
+      addedBy: request.user.email,
+    });
+    response.json({ users: list });
   } catch (error) {
-    console.error("Error in /yts endpoint:", error);
-    return response.status(500).send(`Internal server error: ${error.message}`);
+    response.status(400).json({ error: error.message });
+  }
+});
+
+app.delete("/admin/api/users/:email", ensureAdmin, function (request, response) {
+  try {
+    response.json({ users: users.removeUser(request.params.email) });
+  } catch (error) {
+    response.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/admin/api/users/:email/admin", ensureAdmin, function (request, response) {
+  try {
+    const makeAdmin = request.body.isAdmin === "true" || request.body.isAdmin === true;
+    response.json({ users: users.setAdmin(request.params.email, makeAdmin) });
+  } catch (error) {
+    response.status(400).json({ error: error.message });
   }
 });
 

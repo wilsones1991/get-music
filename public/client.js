@@ -122,14 +122,68 @@ async function get_disk_space_from_server() {
   }
 }
 
-async function write_rutorrent_url_to_ui() {
-  const endpoint = new URL("/rutorrent-url", window.location.href).href;
+async function write_client_url_to_ui() {
+  const endpoint = new URL("/client-url", window.location.href).href;
   // fetch endpoint with get request
   let response = await fetch(endpoint);
   let json = await response.json();
   const url = json.url;
-  let rutorrent_url_div = document.getElementById("rutorrent-url");
-  rutorrent_url_div.innerHTML = `<a href="${url}">rutorrent url</a>`;
+  let client_url_div = document.getElementById("client-url");
+  if (url) {
+    client_url_div.innerHTML = `<a href="${url}">qbittorrent</a>`;
+  } else {
+    client_url_div.innerHTML = "";
+  }
+}
+
+async function populate_media_paths() {
+  // build the directory dropdown from the server-configured paths
+  const endpoint = new URL("/media-paths", window.location.href).href;
+  const response = await fetch(endpoint);
+  const paths = await response.json();
+  const select = document.getElementById("mediatype");
+  select.innerHTML = "";
+  for (const [label, value] of Object.entries(paths)) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    select.appendChild(option);
+  }
+}
+
+async function populate_user_bar() {
+  try {
+    const response = await fetch(new URL("/api/me", window.location.href).href);
+    if (!response.ok) return;
+    const me = await response.json();
+    document.getElementById("user-email").textContent = me.email || "";
+    if (me.isAdmin) {
+      document.getElementById("admin-link").style.display = "inline";
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function update_vpn_badge() {
+  const badge = document.getElementById("vpn-badge");
+  try {
+    const response = await fetch(new URL("/vpn-status", window.location.href).href);
+    const status = await response.json();
+    if (!status.configured) {
+      badge.className = "vpn-badge vpn-unknown";
+      badge.textContent = "VPN: not configured";
+    } else if (status.active) {
+      badge.className = "vpn-badge vpn-ok";
+      badge.textContent = `🔒 VPN active${status.country ? " · " + status.country : ""}`;
+    } else {
+      badge.className = "vpn-badge vpn-down";
+      badge.textContent = "⚠ VPN DOWN — downloads blocked";
+    }
+  } catch (e) {
+    badge.className = "vpn-badge vpn-down";
+    badge.textContent = "⚠ VPN status unknown";
+  }
 }
 
 function set_disk_space_in_ui(json) {
@@ -147,10 +201,15 @@ function set_disk_space_in_ui(json) {
   const { total, free } = json;
   //  add a div to the page with the free space
   let free_space_span = document.getElementById("free-space");
-  const ratio = `${formatBytes(free)} / ${formatBytes(total)}`;
-  const percent_full = ((total - free) / total) * 100;
-  const percent_full_text = `${percent_full.toFixed(1)}% full`;
-  free_space_span.innerHTML = `${ratio} (${percent_full_text})`;
+  if (total) {
+    const ratio = `${formatBytes(free)} / ${formatBytes(total)}`;
+    const percent_full = ((total - free) / total) * 100;
+    const percent_full_text = `${percent_full.toFixed(1)}% full`;
+    free_space_span.innerHTML = `${ratio} (${percent_full_text})`;
+  } else {
+    // qBittorrent only reports free space on the download disk
+    free_space_span.innerHTML = `${formatBytes(free)} free`;
+  }
 }
 
 async function search() {
@@ -190,8 +249,16 @@ document.addEventListener("DOMContentLoaded", async function (event) {
     // i.e. "kevin"
     document.getElementById("label").value = hash.replace("#", "");
   }
+  populate_user_bar();
+  update_vpn_badge();
+  setInterval(update_vpn_badge, 30000);
   try {
-    await write_rutorrent_url_to_ui();
+    await populate_media_paths();
+  } catch (e) {
+    console.error(e);
+  }
+  try {
+    await write_client_url_to_ui();
   } catch (e) {
     console.error(e);
   }
