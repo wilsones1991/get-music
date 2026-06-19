@@ -43,26 +43,24 @@ async function addDownload(url, kind) {
   };
 }
 
-// Normalize one MeTube history entry to the fields the status table needs.
+// A MeTube history group can be an object map { id: entry } or an array of
+// [id, entry] pairs (or bare entries). Return the raw entry objects either way.
+function rawEntries(group) {
+  if (!group) return [];
+  return Array.isArray(group)
+    ? group.map((pair) => (Array.isArray(pair) ? pair[1] : pair))
+    : Object.values(group);
+}
+
+// Normalize one MeTube history entry to the fields the status table needs. Note:
+// MeTube's REST /history reports an in-flight item as status "pending" with no
+// percent (live progress is only pushed over its websocket), so the table can't
+// show a live percentage — only pending → finished/error.
 function normalizeEntry(entry) {
   return {
     title: entry.title || entry.name || entry.url || "(unknown)",
     status: entry.status || "?",
-    // MeTube reports percent as 0..100 (may be null while resolving metadata).
-    percent: typeof entry.percent === "number" ? entry.percent : null,
-    speed: entry.speed || null, // bytes/sec when downloading
   };
-}
-
-// MeTube's /history returns groups (queue / pending / done) each keyed by id.
-// Flatten them into a single recent-first list for the status table.
-function flatten(group) {
-  if (!group) return [];
-  // Group can be an object map { id: entry } or an array of [id, entry] pairs.
-  const values = Array.isArray(group)
-    ? group.map((pair) => (Array.isArray(pair) ? pair[1] : pair))
-    : Object.values(group);
-  return values.map(normalizeEntry);
 }
 
 // Returns the most recent MeTube items, normalized for the status table.
@@ -72,8 +70,25 @@ async function getHistory(limit = 5) {
   if (!res.ok) throw new Error(`MeTube /history failed (status ${res.status})`);
   const data = await res.json();
   // Active items (queue/pending) first, then completed.
-  const items = [...flatten(data?.queue), ...flatten(data?.pending), ...flatten(data?.done)];
+  const items = [
+    ...rawEntries(data?.queue),
+    ...rawEntries(data?.pending),
+    ...rawEntries(data?.done),
+  ].map(normalizeEntry);
   return items.slice(0, limit);
 }
 
-module.exports = { isConfigured, addDownload, getHistory };
+// Returns the ids of completed downloads. Used by the completion watcher to
+// trigger a Jellyfin refresh once a file actually exists (downloads finish
+// minutes after submission, so refreshing on submit is too early).
+async function getFinishedIds() {
+  if (!BASE) return [];
+  const res = await fetch(`${BASE}/history`);
+  if (!res.ok) throw new Error(`MeTube /history failed (status ${res.status})`);
+  const data = await res.json();
+  return rawEntries(data?.done)
+    .map((e) => e.id)
+    .filter(Boolean);
+}
+
+module.exports = { isConfigured, addDownload, getHistory, getFinishedIds };

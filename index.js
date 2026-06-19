@@ -208,8 +208,13 @@ app.post("/yt", ensureAuth, async function (request, response) {
     }
     const result = await metube.addDownload(url, kind);
     if (result.success) {
-      jellyfin.refreshLibrary(); // fire-and-forget
-      return response.status(200).send(`submitted ${kind}: ${url}`);
+      // No refresh here — the file lands minutes later; the completion watcher
+      // (see below) refreshes Jellyfin once it actually exists.
+      return response
+        .status(200)
+        .send(
+          `Submitted (${kind}). Downloading in the background — it'll show "✅ Done" below and appear in Jellyfin when finished. Large mixes can take a few minutes.`
+        );
     }
     const errorMsg = `MeTube rejected the link (status ${result.status}). Response: ${result.responseBody}`;
     console.error("MeTube submission failed:", errorMsg);
@@ -283,15 +288,17 @@ app.get("/yt-status", ensureAuth, async function (request, response) {
     const limit = parseInt(request.query.limit, 10) || 5;
     const items = await metube.getHistory(limit);
     const content = items
-      .map(({ title, status, percent, speed }) => {
+      .map(({ title, status }) => {
+        // MeTube's REST API doesn't expose live percent, so an in-flight item
+        // shows as "pending" the whole time — present that as "Working…" rather
+        // than a misleading "0%".
         let dlStatus;
         if (status === "finished") {
           dlStatus = "✅ Done";
-        } else if (speed > 0) {
-          const mbps = (speed / 1000000).toFixed(1);
-          dlStatus = `⬇ ${percent ?? 0}% · ${mbps} MB/s`;
+        } else if (status === "error") {
+          dlStatus = "❌ Failed";
         } else {
-          dlStatus = `${percent ?? 0}% · ${status}`;
+          dlStatus = "⏳ Working…";
         }
         return `<tr>
               <td>${String(title).substring(0, 40)}</td>
@@ -371,6 +378,32 @@ app.post("/admin/api/users/:email/admin", ensureAdmin, function (request, respon
     response.status(400).json({ error: error.message });
   }
 });
+
+// Watch MeTube for newly-completed downloads and refresh Jellyfin when one
+// finishes. Link downloads complete minutes after submission, so refreshing at
+// submit time is too early; this is what actually gets the file into Jellyfin
+// without waiting for its scheduled scan.
+if (metube.isConfigured()) {
+  const seenFinished = new Set();
+  let primed = false; // first poll just records existing items, no refresh
+  setInterval(async () => {
+    try {
+      const ids = await metube.getFinishedIds();
+      const fresh = ids.filter((id) => !seenFinished.has(id));
+      ids.forEach((id) => seenFinished.add(id));
+      if (!primed) {
+        primed = true;
+        return;
+      }
+      if (fresh.length) {
+        console.log(`MeTube: ${fresh.length} new completion(s); refreshing Jellyfin`);
+        jellyfin.refreshLibrary(); // fire-and-forget
+      }
+    } catch (error) {
+      // Transient (MeTube restarting / WireGuard blip) — try again next tick.
+    }
+  }, 30000).unref();
+}
 
 app.listen(app.get("port"), function () {
   console.log("Node app is running at http://0.0.0.0:" + app.get("port"));
