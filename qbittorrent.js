@@ -8,7 +8,7 @@ const BASE = (process.env.QBITTORRENT_URL || "").replace(/\/+$/, "");
 const USER = process.env.QBITTORRENT_USER;
 const PASS = process.env.QBITTORRENT_PASS;
 
-let sid = null; // cached SID cookie value
+let sidCookie = null; // cached session cookie as a full "NAME=VALUE" pair
 
 function api(path) {
   return `${BASE}/api/v2${path}`;
@@ -18,7 +18,7 @@ function api(path) {
 // the host-header validation is disabled. Sending Referer keeps it happy.
 function baseHeaders(extra = {}) {
   const headers = { Referer: BASE, ...extra };
-  if (sid) headers.Cookie = `SID=${sid}`;
+  if (sidCookie) headers.Cookie = sidCookie;
   return headers;
 }
 
@@ -41,17 +41,19 @@ async function login() {
     );
   }
   const setCookie = res.headers.get("set-cookie") || "";
-  const match = setCookie.match(/SID=([^;]+)/);
+  // qBittorrent names the session cookie "SID" (<=4.x) or "QBT_SID_<port>" (5.x).
+  // Capture the whole NAME=VALUE pair so we resend it verbatim regardless of name.
+  const match = setCookie.match(/((?:QBT_)?SID(?:_\d+)?=[^;]+)/);
   if (!match) {
     throw new Error("qBittorrent login succeeded but no SID cookie was returned");
   }
-  sid = match[1];
-  return sid;
+  sidCookie = match[1];
+  return sidCookie;
 }
 
 // Run a request, logging in first if needed and retrying once on a 403 (expired session).
 async function withAuth(doRequest) {
-  if (!sid) await login();
+  if (!sidCookie) await login();
   let res = await doRequest();
   if (res.status === 403) {
     await login();
@@ -114,6 +116,7 @@ async function getTorrents(limit = 5) {
     downloaded: t.completed, // bytes completed
     progress: t.progress, // 0..1
     finished: t.progress >= 1,
+    dlspeed: t.dlspeed, // bytes/sec
     state: t.state,
     hash: t.hash,
     category: t.category,

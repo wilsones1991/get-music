@@ -209,9 +209,20 @@ app.get("/dl-status", ensureAuth, async function (request, response) {
     const items = await qbittorrent.getTorrents(limit);
     const content = items
       .map((item) => {
-        const { name, size, finished } = item;
+        const { name, size, finished, progress, dlspeed, state } = item;
         const sizeGB = (size / 1000000000).toFixed(2);
-        const dlStatus = finished ? "Done" : "Started";
+        const pct = Math.round((progress || 0) * 100);
+        let dlStatus;
+        if (finished) {
+          dlStatus = "✅ Done";
+        } else if (dlspeed > 0) {
+          const mbps = (dlspeed / 1000000).toFixed(1);
+          dlStatus = `⬇ ${pct}% · ${mbps} MB/s`;
+        } else {
+          // Stalled/queued/metadata states: show progress + the qBittorrent state
+          // so a stuck download (e.g. no seeds) is distinguishable from a moving one.
+          dlStatus = `${pct}% · ${state}`;
+        }
         return `<tr>
               <td>${name.substring(0, 40)}</td>
               <td>${sizeGB}GB</td>
