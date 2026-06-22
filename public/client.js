@@ -149,6 +149,12 @@ async function populate_media_paths() {
     option.textContent = label;
     select.appendChild(option);
   }
+  // Default to the Music Directory so audio downloads don't silently fall into
+  // the Movies folder (the first entry) and miss the Jellyfin music library.
+  const musicOption = Array.from(select.options).find(
+    (o) => o.textContent === "Music Directory"
+  );
+  if (musicOption) select.value = musicOption.value;
 }
 
 async function populate_user_bar() {
