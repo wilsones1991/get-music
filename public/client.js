@@ -273,11 +273,16 @@ async function update_vpn_badge() {
 }
 
 function set_disk_space_in_ui(json) {
+  const free_space_span = document.getElementById("free-space");
   if (!json) {
+    free_space_span.textContent = "unavailable";
     return;
   }
+  // Returns a human-readable string, or null when the value isn't a usable
+  // byte count (negative / NaN / null) so callers can show "unavailable".
   function formatBytes(a, b = 2) {
-    if (!+a) return "0 Bytes";
+    if (!Number.isFinite(a) || a < 0) return null;
+    if (a === 0) return "0 Bytes";
     const c = 0 > b ? 0 : b,
       d = Math.floor(Math.log(a) / Math.log(1024));
     return `${parseFloat((a / Math.pow(1024, d)).toFixed(c))} ${
@@ -285,16 +290,18 @@ function set_disk_space_in_ui(json) {
     }`;
   }
   const { total, free } = json;
-  //  add a div to the page with the free space
-  let free_space_span = document.getElementById("free-space");
-  if (total) {
-    const ratio = `${formatBytes(free)} / ${formatBytes(total)}`;
+  const freeText = formatBytes(free);
+  if (freeText === null) {
+    // qBittorrent couldn't read the download disk (free is -1 / null) — usually
+    // a disconnected external drive. Be honest instead of rendering "NaN".
+    free_space_span.textContent = "unavailable (download disk not reachable)";
+  } else if (total) {
+    const ratio = `${freeText} / ${formatBytes(total)}`;
     const percent_full = ((total - free) / total) * 100;
-    const percent_full_text = `${percent_full.toFixed(1)}% full`;
-    free_space_span.innerHTML = `${ratio} (${percent_full_text})`;
+    free_space_span.textContent = `${ratio} (${percent_full.toFixed(1)}% full)`;
   } else {
     // qBittorrent only reports free space on the download disk
-    free_space_span.innerHTML = `${formatBytes(free)} free`;
+    free_space_span.textContent = `${freeText} free`;
   }
 }
 

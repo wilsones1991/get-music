@@ -94,7 +94,12 @@ async function getFreeSpace() {
   const res = await withAuth(() => fetch(api("/sync/maindata"), { headers: baseHeaders() }));
   if (!res.ok) throw new Error(`qBittorrent maindata failed (status ${res.status})`);
   const data = await res.json();
-  const free = data?.server_state?.free_space_on_disk ?? null;
+  // qBittorrent returns -1 for free_space_on_disk when it can't read the
+  // download disk (e.g. an external drive's bind mount went stale). Surface
+  // that as null rather than a bogus negative byte count so the UI can show
+  // "unavailable" instead of a NaN.
+  const raw = data?.server_state?.free_space_on_disk;
+  const free = typeof raw === "number" && raw >= 0 ? raw : null;
   return { total: null, free };
 }
 

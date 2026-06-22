@@ -44,6 +44,40 @@ default. To survive a mini reboot, set Colima to start on login (e.g. a LaunchAg
 `colima start`, or `brew services`-style wrapper). Until then, after a reboot run
 `colima start` once and the stack comes back on its own.
 
+### External-drive watchdog (auto-heal stale mounts) — DONE
+The download drive (`/Volumes/Mac Seagate`) lives on bind mounts into the qBittorrent and
+MeTube containers. If the drive briefly drops off (sleep, loose cable, power blip) macOS
+re-mounts it automatically, **but the running containers keep a stale mount** — inside the
+container the paths read as `Bad file descriptor`, qBittorrent reports
+`free_space_on_disk = -1` (the app then showed *"NaN undefined free"*), and downloads stop
+making progress. The only fix is to restart the affected container so Docker re-establishes
+the mount.
+
+A watchdog automates that recovery:
+- `~/qbt-vpn/disk-watchdog.sh` checks whether each container can read the drive. If a
+  container's mount is stale **while the host drive is healthy again**, it restarts just
+  that container. It deliberately does nothing while the drive is genuinely unplugged, so
+  it never restart-loops. Actions are logged to `~/qbt-vpn/disk-watchdog.log`.
+  - It gauges host-drive health from the **mount table** (`mount`), not by reading the
+    drive's contents: under launchd macOS TCC denies the agent read access to
+    external-volume *contents* even when the drive is healthy, so an `ls`-based check
+    false-negatives on every run (it did, until this was fixed) and the watchdog never
+    acts. `mount` isn't subject to TCC, so it reports the truth in both contexts.
+- `com.eric.qbt-disk-watchdog` LaunchAgent runs it every 120s (and at login).
+
+Reference copies live in `docs/disk-watchdog.sh` and `docs/com.eric.qbt-disk-watchdog.plist`
+(the live copies are under `~/qbt-vpn/` and `~/Library/LaunchAgents/`). Install/reload with:
+
+```
+launchctl unload ~/Library/LaunchAgents/com.eric.qbt-disk-watchdog.plist 2>/dev/null
+launchctl load -w ~/Library/LaunchAgents/com.eric.qbt-disk-watchdog.plist
+launchctl list | grep qbt-disk-watchdog        # confirm it's registered
+```
+
+> The app side is hardened too: `qbittorrent.js` maps qBittorrent's `-1` sentinel to `null`
+> and the UI shows *"unavailable (download disk not reachable)"* instead of a NaN, so even
+> mid-outage the disk-space line stays honest.
+
 ---
 
 ## 1. Mac mini: qBittorrent + Mullvad (Docker) — reference
