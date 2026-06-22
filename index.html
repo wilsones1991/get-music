@@ -79,8 +79,10 @@
         <div>
           Free space remaining on instance: <span id="free-space">loading...</span>
         </div>
-    <h2>Direct all downloads to which directory? (eg movie/tv/general):</h2>
-        <select form="main-form" name="mediatype" id="mediatype" class="biginput">
+        <!-- Directory is auto-detected from the release name; this picker is
+             hidden and only carries the chosen value with the form. When the
+             type can't be recognized, the #route-modal below asks instead. -->
+        <select form="main-form" name="mediatype" id="mediatype" class="biginput" style="display:none">
             <option>loading…</option>
         </select>
       <label class="biginput" for="label">with label:</label>
@@ -92,7 +94,7 @@
     <form id="main-form" hx-post="/post" hx-swap="innerHTML" hx-target="#post-output" hx-indicator="#spinner">
         <h3>Manually input a magnet link (or a url to a torrent)</h3>
         <input type="text" id="magnet" name="magnet" placeholder="manual magnet link here">
-        <input type="submit" id="submit" value="Download torrent/magnet link" class="blue-text">
+        <input type="button" id="submit" value="Download torrent/magnet link" class="blue-text" onclick="manualDownload()">
     </form>
     <p id="yt-output"></p>
     <form id="yt-form" hx-post="/yt" hx-swap="innerHTML" hx-target="#yt-output" hx-indicator="#spinner">
@@ -130,6 +132,18 @@
         <a href="https://letterboxd.com/lists/">[can't think of a movie?]</a>
     </div>
     <div id="example-table"></div>
+
+    <!-- Directory picker, shown only when the type can't be auto-detected. -->
+    <div id="route-modal" class="modal-overlay" style="display:none">
+      <div class="modal-box">
+        <h3>Couldn't tell what this is — where should it go?</h3>
+        <select id="route-modal-select" class="biginput"></select>
+        <div class="modal-actions">
+          <button type="button" class="blue-text" onclick="confirmRouteModal()">Download</button>
+          <button type="button" onclick="closeRouteModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
     <br>
     <br>
     <!-- <image src="batman-example.png" width="900px"></image> -->
@@ -188,6 +202,27 @@
         .vpn-ok { background: #e6f4ea; color: #137333; }
         .vpn-down { background: #fce8e6; color: #c5221f; }
         .vpn-unknown { background: #f1f3f4; color: #5f6368; }
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .modal-box {
+            background: #fff;
+            padding: 24px;
+            border-radius: 8px;
+            max-width: 90%;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+        }
+        .modal-actions {
+            margin-top: 16px;
+            display: flex;
+            gap: 12px;
+        }
     </style>
 </body>
 

@@ -16,22 +16,21 @@ const jellyfin = require("./jellyfin");
 const vpn = require("./vpn");
 const users = require("./users");
 const { passport, router: authRouter, ensureAuth, ensureAdmin } = require("./auth");
+const {
+  MEDIA_PATHS,
+  ALLOWED_SAVE_PATHS,
+  classifyMedia,
+  nameFromMagnet,
+} = require("./classify");
 
 const TMDB_KEY = process.env.TMDB_KEY;
 const QBITTORRENT_WEBUI_URL = process.env.QBITTORRENT_URL;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const isProd = process.env.NODE_ENV === "production";
 
-// Download directories as qBittorrent (in its container) sees them. Driven by
-// env so the same image works for any mount layout; the frontend builds its
-// dropdown from /media-paths and the server only accepts these exact values.
-const MEDIA_PATHS = {
-  "Movie Directory": process.env.MEDIA_MOVIES || "/downloads/movies",
-  "TV Show Directory": process.env.MEDIA_TV || "/downloads/tvshows",
-  "Music Directory": process.env.MEDIA_MUSIC || "/downloads/music",
-  "General Torrent Directory": process.env.MEDIA_GENERAL || "/downloads/torrents",
-};
-const ALLOWED_SAVE_PATHS = new Set(Object.values(MEDIA_PATHS));
+// MEDIA_PATHS / ALLOWED_SAVE_PATHS live in ./classify (single source of truth):
+// the frontend builds its dropdown from /media-paths, the classifier routes
+// among these, and the server only accepts these exact values on submit.
 
 const app = express();
 app.set("port", process.env.PORT || 5000);
@@ -128,6 +127,14 @@ app.use("/snowfl", ensureAuth, snowfl);
 
 app.get("/media-paths", ensureAuth, function (request, response) {
   response.json(MEDIA_PATHS);
+});
+
+// Auto-routing: given a magnet/url (or an explicit name + snowfl type), return
+// the directory it should go in. { confident:false } means "name unrecognized,
+// ask the user". The client uses this to skip the dropdown on the happy path.
+app.get("/classify", ensureAuth, function (request, response) {
+  const name = request.query.name || nameFromMagnet(request.query.magnet || "");
+  response.json(classifyMedia({ name, snowflType: request.query.type }));
 });
 
 app.get("/client-url", ensureAuth, function (request, response) {

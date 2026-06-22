@@ -36,11 +36,92 @@ function makeTable(data) {
   return table;
 }
 
+// --- auto-routing / download submission ---------------------------------------
+// doSubmit is the single chokepoint that actually fires the HTMX POST to /post.
+// It sets the magnet + target directory, marks the form "routed" so the submit
+// interceptor (which classifies un-routed manual entries) lets it through, then
+// submits. Every programmatic path (YTS, snowfl, modal) routes through here.
+function doSubmit(magnet, path) {
+  const form = document.getElementById("main-form");
+  document.getElementById("magnet").value = magnet;
+  if (path) selectMediaByPath(path);
+  form.dataset.routed = "1";
+  if (form.requestSubmit) form.requestSubmit();
+  else form.submit();
+}
+
+function selectMediaByPath(path) {
+  const sel = document.getElementById("mediatype");
+  if (Array.from(sel.options).some((o) => o.value === path)) sel.value = path;
+}
+
+function mediaPathByLabel(label) {
+  const sel = document.getElementById("mediatype");
+  const opt = Array.from(sel.options).find((o) => o.textContent === label);
+  return opt ? opt.value : null;
+}
+
+// Ask the server where a magnet/url should go. Returns the classify result, or
+// an "unconfident" stub on error so we fall back to asking the user.
+async function classifyRemote({ magnet, name, type }) {
+  try {
+    const u = new URL("/classify", window.location.href);
+    if (magnet) u.searchParams.set("magnet", magnet);
+    if (name) u.searchParams.set("name", name);
+    if (type) u.searchParams.set("type", type);
+    const res = await fetch(u.href);
+    return await res.json();
+  } catch (e) {
+    console.error(e);
+    return { confident: false };
+  }
+}
+
+// snowfl "Easy Download" button. The route was decided server-side: a confident
+// guess submits straight to its directory, otherwise we open the picker modal.
+function routeMagnet(magnet, path, confident) {
+  if (confident && path) doSubmit(magnet, path);
+  else openRouteModal(magnet);
+}
+
+// Manual magnet box (button click / Enter): classify first, then submit or ask.
+function manualDownload() {
+  routeThenSubmit(document.getElementById("magnet").value.trim());
+}
+async function routeThenSubmit(magnet) {
+  if (!magnet) return;
+  const route = await classifyRemote({ magnet });
+  if (route.confident && route.path) doSubmit(magnet, route.path);
+  else openRouteModal(magnet);
+}
+
+let pendingMagnet = null;
+function openRouteModal(magnet) {
+  pendingMagnet = magnet;
+  const sel = document.getElementById("route-modal-select");
+  const mediatype = document.getElementById("mediatype");
+  // mirror the (hidden) mediatype options into the modal picker, defaulting to
+  // the same safe choice (Music) rather than the first option (Movies)
+  sel.innerHTML = mediatype.innerHTML;
+  if (mediatype.value) sel.value = mediatype.value;
+  document.getElementById("route-modal").style.display = "flex";
+}
+function closeRouteModal() {
+  document.getElementById("route-modal").style.display = "none";
+  pendingMagnet = null;
+}
+function confirmRouteModal() {
+  const path = document.getElementById("route-modal-select").value;
+  const magnet = pendingMagnet;
+  closeRouteModal();
+  if (magnet) doSubmit(magnet, path);
+}
+
 function autosubmit(t_url, hash, quality, type, movieTitle, movieUrl) {
-  // populate and submit the post request form at the top of the page
+  // YTS downloads are always movies, so they skip classification and route
+  // straight to the Movie directory.
   movieTitle = decodeURIComponent(movieTitle);
   movieUrl = decodeURIComponent(movieUrl);
-  document.getElementById("magnet").value = t_url;
 
   // Helper function to create or update hidden input
   function setHiddenInput(id, name, value) {
@@ -62,8 +143,7 @@ function autosubmit(t_url, hash, quality, type, movieTitle, movieUrl) {
   setHiddenInput("movieTitle", "movieTitle", movieTitle);
   setHiddenInput("movieUrl", "movieUrl", movieUrl);
 
-  let submit_button = document.querySelector("#submit");
-  submit_button.click();
+  doSubmit(t_url, mediaPathByLabel("Movie Directory"));
 }
 
 function torrent_to_button_html(torrent, movieTitle, movieUrl) {
@@ -255,6 +335,28 @@ document.addEventListener("DOMContentLoaded", async function (event) {
     // i.e. "kevin"
     document.getElementById("label").value = hash.replace("#", "");
   }
+  // HTMX has its own submit listener on #main-form, so we must ensure it only
+  // ever sees *routed* submissions. Programmatic submits (doSubmit) set
+  // data-routed="1" and pass through; any stray native submit (e.g. Enter in
+  // the lone magnet field) is blocked here and rerouted through classification.
+  // stopImmediatePropagation keeps the un-routed event from reaching HTMX.
+  document.getElementById("main-form").addEventListener("submit", function (e) {
+    if (this.dataset.routed === "1") {
+      this.dataset.routed = "";
+      return; // already routed — let HTMX send it
+    }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    manualDownload();
+  });
+  // Enter in the magnet box routes explicitly (don't rely on implicit submit).
+  document.getElementById("magnet").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      manualDownload();
+    }
+  });
+
   populate_user_bar();
   update_vpn_badge();
   setInterval(update_vpn_badge, 30000);
