@@ -19,6 +19,14 @@ mini behind gluetun (so its indexer traffic uses the VPN too), add public indexe
 then set `PROWLARR_URL` + `PROWLARR_API_KEY` (see `.env.example`). With it unset, search just
 uses Snowfl + fuzzy ranking.
 
+> **Download-link gotcha (already handled in code):** Prowlarr returns its own http *proxy*
+> download links (`http://<host>:9696/<id>/download?...`), not raw magnets. qBittorrent fetches
+> those itself — but it runs inside gluetun's VPN namespace and can't reach `PROWLARR_URL`'s
+> host (the mini's WireGuard IP), so the grab silently fails while the WebUI still says "added".
+> Because qBittorrent *shares* Prowlarr's network namespace, it can reach it on `127.0.0.1`, so
+> `prowlarr.js` rewrites those proxy links to `127.0.0.1` (same port) before handing them to
+> qBittorrent. Override with `PROWLARR_QBIT_URL` if your topology differs.
+
 ## Architecture
 
 ```

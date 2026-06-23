@@ -12,6 +12,36 @@ const fetch = (...args) =>
 const BASE = (process.env.PROWLARR_URL || "").replace(/\/+$/, "");
 const API_KEY = process.env.PROWLARR_API_KEY || "";
 
+// Prowlarr doesn't return raw magnets — it returns its own http proxy links
+// (http://<PROWLARR_URL host>/<id>/download?apikey=...) that redirect to the real
+// magnet/.torrent. qBittorrent fetches these itself, but it runs inside the VPN
+// (gluetun) namespace and can't reach PROWLARR_URL's host (e.g. the mini's
+// WireGuard IP). Since qBittorrent shares Prowlarr's namespace, it CAN reach it on
+// localhost — so rewrite the proxy link's host to one qBittorrent can fetch.
+// Override with PROWLARR_QBIT_URL; otherwise default to 127.0.0.1 on the same port.
+const QBIT_BASE = (process.env.PROWLARR_QBIT_URL || "").replace(/\/+$/, "");
+
+// Rewrite a Prowlarr proxy download link to a host qBittorrent can reach. Real
+// `magnet:` links and links to other hosts are returned untouched.
+function downloadUrlForQbit(u) {
+  if (!u || !/^https?:/i.test(u) || !BASE) return u;
+  try {
+    const url = new URL(u);
+    const base = new URL(BASE);
+    if (url.host !== base.host) return u; // not a Prowlarr proxy link
+    if (QBIT_BASE) {
+      const q = new URL(QBIT_BASE);
+      url.protocol = q.protocol;
+      url.host = q.host;
+    } else {
+      url.hostname = "127.0.0.1"; // same-namespace default; keep the port
+    }
+    return url.toString();
+  } catch (e) {
+    return u;
+  }
+}
+
 // Newznab/Torznab top-level category ids. Prowlarr reports a release's categories
 // as either bare numbers or { id, name } objects depending on version.
 const AUDIO = 3000;
@@ -69,9 +99,10 @@ function normalize(release) {
   const type = categoryType(release);
   return {
     name: release.title || "(untitled)",
-    // qBittorrent accepts both magnet: and http(s) .torrent URLs, so either works
-    // as the download target. Prefer a real magnet; fall back to the download URL.
-    magnet: release.magnetUrl || release.downloadUrl || undefined,
+    // qBittorrent accepts both magnet: and http(s) .torrent URLs. Prefer a real
+    // magnet; fall back to Prowlarr's proxy link, rewritten to a host qBittorrent
+    // can actually reach from inside the VPN namespace.
+    magnet: downloadUrlForQbit(release.magnetUrl || release.downloadUrl) || undefined,
     url: release.infoUrl || release.downloadUrl || "",
     size: humanSize(release.size),
     seeder: release.seeders ?? "",
