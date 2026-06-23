@@ -9,7 +9,7 @@ const FileStore = require("session-file-store")(session);
 const bodyParser = require("body-parser");
 const emojiFavicon = require("emoji-favicon");
 
-const snowfl = require("./snowfl");
+const search = require("./search");
 const qbittorrent = require("./qbittorrent");
 const metube = require("./metube");
 const jellyfin = require("./jellyfin");
@@ -123,7 +123,9 @@ app.get("/empty", ensureAuth, function (request, response) {
   response.send("");
 });
 
-app.use("/snowfl", ensureAuth, snowfl);
+// Unified search (Snowfl + Prowlarr, fuzzy-ranked). Kept at /snowfl so the
+// existing frontend form target doesn't change.
+app.use("/snowfl", ensureAuth, search);
 
 app.get("/media-paths", ensureAuth, function (request, response) {
   response.json(MEDIA_PATHS);

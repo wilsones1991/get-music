@@ -1,9 +1,23 @@
 # get-music
 
-A small web app to search torrent aggregators (YTS, Snowfl) and send downloads to
+A small web app to search torrent aggregators (YTS, Snowfl, Prowlarr) and send downloads to
 **qBittorrent**, plus **paste a YouTube (or other) link** to grab it as MP3 or video (via
 self-hosted **MeTube**), with **Google SSO** + an admin-managed email allowlist, and an
 automatic **Jellyfin** library refresh after each download.
+
+## Search
+
+The aggregator search box queries **Snowfl** (always) and **Prowlarr** (if configured) in
+parallel, de-dupes by torrent hash, and **fuzzy-ranks** the merged results by relevance to
+the query — matches anywhere in the release name count, so searching `album` surfaces
+`Artist - Album` rather than only titles that start with the query. The **🎵 music only**
+checkbox scopes the search to the Audio category (Prowlarr) and filters out non-music rows.
+
+**Prowlarr** (`prowlarr.js`) is optional but strongly recommended for music: it aggregates
+many indexers Snowfl doesn't cover and supports real Audio-category search. Run it on the Mac
+mini behind gluetun (so its indexer traffic uses the VPN too), add public indexers in its UI,
+then set `PROWLARR_URL` + `PROWLARR_API_KEY` (see `.env.example`). With it unset, search just
+uses Snowfl + fuzzy ranking.
 
 ## Architecture
 

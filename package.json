@@ -14,6 +14,7 @@
     "emoji-favicon": "^0.3.0",
     "express": "^4.13.3",
     "express-session": "^1.18.0",
+    "fuse.js": "^7.4.2",
     "json-html-table": "^2.0.1",
     "json2html": "^0.0.8",
     "node-fetch": "^3.3.0",
