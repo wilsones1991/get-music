@@ -11,6 +11,7 @@ const emojiFavicon = require("emoji-favicon");
 
 const search = require("./search");
 const qbittorrent = require("./qbittorrent");
+const failures = require("./failures");
 const metube = require("./metube");
 const jellyfin = require("./jellyfin");
 const vpn = require("./vpn");
@@ -249,26 +250,40 @@ app.get("/dl-status", ensureAuth, async function (request, response) {
   try {
     const limit = parseInt(request.query.limit, 10) || 5;
     const items = await qbittorrent.getTorrents(limit);
-    const content = items
-      .map((item) => {
-        const { name, size, finished, progress, dlspeed, state } = item;
-        const sizeGB = (size / 1000000000).toFixed(2);
-        const pct = Math.round((progress || 0) * 100);
-        let dlStatus;
-        if (finished) {
-          dlStatus = "✅ Done";
-        } else if (dlspeed > 0) {
-          const mbps = (dlspeed / 1000000).toFixed(1);
-          dlStatus = `⬇ ${pct}% · ${mbps} MB/s`;
-        } else {
-          // Stalled/queued/metadata states: show progress + the qBittorrent state
-          // so a stuck download (e.g. no seeds) is distinguishable from a moving one.
-          dlStatus = `${pct}% · ${state}`;
-        }
+    const live = items.map((item) => {
+      const { name, size, finished, progress, dlspeed, state, addedOn } = item;
+      const pct = Math.round((progress || 0) * 100);
+      let dlStatus;
+      if (finished) {
+        dlStatus = "✅ Done";
+      } else if (dlspeed > 0) {
+        const mbps = (dlspeed / 1000000).toFixed(1);
+        dlStatus = `⬇ ${pct}% · ${mbps} MB/s`;
+      } else {
+        // Stalled/queued/metadata states: show progress + the qBittorrent state
+        // so a stuck download (e.g. no seeds) is distinguishable from a moving one.
+        dlStatus = `${pct}% · ${state}`;
+      }
+      return { name, sizeGB: size / 1000000000, ts: addedOn, dlStatus };
+    });
+    // Watchdog-ended downloads are deleted from qBittorrent, so they only survive
+    // in the failure log — merge them in (newest-first) so a timed-out torrent
+    // shows "❌ Failed — …" instead of silently disappearing.
+    const failed = failures.recent().map((f) => ({
+      name: f.name,
+      sizeGB: null,
+      ts: f.failedAt,
+      dlStatus: `❌ Failed — ${f.reason}`,
+    }));
+    const content = [...failed, ...live]
+      .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+      .slice(0, limit)
+      .map((r) => {
+        const size = r.sizeGB == null ? "—" : `${r.sizeGB.toFixed(2)}GB`;
         return `<tr>
-              <td>${name.substring(0, 40)}</td>
-              <td>${sizeGB}GB</td>
-              <td>${dlStatus}</td>
+              <td>${r.name.substring(0, 40)}</td>
+              <td>${size}</td>
+              <td>${r.dlStatus}</td>
             </tr>`;
       })
       .join("\n");
@@ -412,6 +427,80 @@ if (metube.isConfigured()) {
       // Transient (MeTube restarting / WireGuard blip) — try again next tick.
     }
   }, 30000).unref();
+}
+
+// Stall watchdog: end downloads that can't find anyone to download from. A
+// torrent stuck in metaDL/stalledDL with no reachable seeders will sit at 0%
+// forever — qBittorrent never gives up on its own. Once a download makes no
+// progress for STALL_TIMEOUT, we delete it (and any partial files) and log the
+// failure so the UI can show "❌ Failed — no seeders" instead of a perpetual
+// "0% · metaDL". We only ever time out torrents that are actively trying to
+// download — never a user-paused torrent, a finished/seeding one, or one whose
+// files went missing on a drive disconnect (that's a different, recoverable
+// failure handled elsewhere).
+if (process.env.QBITTORRENT_URL) {
+  const STALL_TIMEOUT_MS =
+    (parseInt(process.env.TORRENT_STALL_TIMEOUT_MIN, 10) || 30) * 60 * 1000;
+  const DOWNLOADING_STATES = new Set([
+    "downloading",
+    "metaDL",
+    "forcedMetaDL",
+    "stalledDL",
+    "forcedDL",
+    "queuedDL",
+    "allocating",
+  ]);
+  // hash -> { downloaded, since }: `since` is when progress last advanced.
+  const progress = new Map();
+
+  setInterval(async () => {
+    let torrents;
+    try {
+      torrents = await qbittorrent.getAllTorrents();
+    } catch (error) {
+      return; // qBittorrent unreachable (restart / VPN blip) — retry next tick.
+    }
+    const now = Date.now();
+    const live = new Set();
+    for (const t of torrents) {
+      if (t.finished || !DOWNLOADING_STATES.has(t.state)) continue;
+      live.add(t.hash);
+      const prev = progress.get(t.hash);
+      if (!prev) {
+        // First sighting. If it's already at 0 bytes, anchor the stall clock to
+        // when it was added so a torrent stuck across an app restart is caught
+        // promptly rather than handed a fresh full window.
+        const since = t.downloaded === 0 && t.addedOn ? t.addedOn * 1000 : now;
+        progress.set(t.hash, { downloaded: t.downloaded, since });
+        continue;
+      }
+      if (t.downloaded > prev.downloaded) {
+        progress.set(t.hash, { downloaded: t.downloaded, since: now });
+        continue;
+      }
+      if (now - prev.since >= STALL_TIMEOUT_MS) {
+        const mins = Math.round((now - prev.since) / 60000);
+        try {
+          await qbittorrent.deleteTorrent(t.hash, true);
+          failures.record({
+            hash: t.hash,
+            name: t.name,
+            reason: t.numSeeds > 0 ? "stalled (peers unreachable)" : "no seeders",
+          });
+          progress.delete(t.hash);
+          console.log(
+            `Watchdog: ended "${t.name}" after ${mins}m with no progress (${t.state}, ${t.numSeeds} seeds)`
+          );
+        } catch (error) {
+          console.error(`Watchdog: failed to delete ${t.hash}: ${error.message}`);
+        }
+      }
+    }
+    // Forget bookkeeping for torrents that finished or were removed.
+    for (const hash of progress.keys()) {
+      if (!live.has(hash)) progress.delete(hash);
+    }
+  }, 60000).unref();
 }
 
 app.listen(app.get("port"), function () {

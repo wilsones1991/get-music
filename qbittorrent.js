@@ -103,6 +103,23 @@ async function getFreeSpace() {
   return { total: null, free };
 }
 
+function normalize(t) {
+  return {
+    name: t.name,
+    size: t.size,
+    downloaded: t.completed, // bytes completed
+    progress: t.progress, // 0..1
+    finished: t.progress >= 1,
+    dlspeed: t.dlspeed, // bytes/sec
+    state: t.state,
+    hash: t.hash,
+    category: t.category,
+    addedOn: t.added_on, // unix seconds
+    numSeeds: t.num_seeds, // connected seeds
+    numComplete: t.num_complete, // seeds in the swarm
+  };
+}
+
 // Returns the most recent torrents, normalized for the recent-downloads table.
 async function getTorrents(limit = 5) {
   const params = new URLSearchParams({
@@ -115,17 +132,37 @@ async function getTorrents(limit = 5) {
   );
   if (!res.ok) throw new Error(`qBittorrent torrents/info failed (status ${res.status})`);
   const items = await res.json();
-  return items.map((t) => ({
-    name: t.name,
-    size: t.size,
-    downloaded: t.completed, // bytes completed
-    progress: t.progress, // 0..1
-    finished: t.progress >= 1,
-    dlspeed: t.dlspeed, // bytes/sec
-    state: t.state,
-    hash: t.hash,
-    category: t.category,
-  }));
+  return items.map(normalize);
 }
 
-module.exports = { login, addTorrent, getFreeSpace, getTorrents };
+// Returns every torrent (no limit), normalized. Used by the stall watchdog,
+// which needs to see all in-flight downloads, not just the latest few.
+async function getAllTorrents() {
+  const res = await withAuth(() => fetch(api("/torrents/info"), { headers: baseHeaders() }));
+  if (!res.ok) throw new Error(`qBittorrent torrents/info failed (status ${res.status})`);
+  const items = await res.json();
+  return items.map(normalize);
+}
+
+// Permanently remove a torrent. deleteFiles also wipes any partial data on disk
+// (a no-seeder torrent has nothing worth keeping).
+async function deleteTorrent(hash, deleteFiles = true) {
+  const res = await withAuth(() =>
+    fetch(api("/torrents/delete"), {
+      method: "POST",
+      headers: baseHeaders({ "Content-Type": "application/x-www-form-urlencoded" }),
+      body: new URLSearchParams({ hashes: hash, deleteFiles: deleteFiles ? "true" : "false" }),
+    })
+  );
+  if (!res.ok) throw new Error(`qBittorrent delete failed (status ${res.status})`);
+  return true;
+}
+
+module.exports = {
+  login,
+  addTorrent,
+  getFreeSpace,
+  getTorrents,
+  getAllTorrents,
+  deleteTorrent,
+};
